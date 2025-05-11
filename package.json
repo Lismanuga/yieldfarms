@@ -1,0 +1,16 @@
+{
+  "name": "merchantmoe-lb-reader",
+  "version": "1.0.0",
+  "description": "Merchant Moe LiquidityBook position reader",
+  "main": "readLBPair.ts",
+  "scripts": {
+    "start": "ts-node readLBPair.ts",
+    "rebalance": "ts-node rebalance.ts"
+  },
+  "dependencies": {
+    "viem": "^2.7.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3",
+    "dotenv": "^16.4.5"
+  }
+} 

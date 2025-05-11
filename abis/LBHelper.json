@@ -1,0 +1,105 @@
+[
+  {
+    "inputs": [
+      {
+        "internalType": "contract ILBPair",
+        "name": "lbPair",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "minAmountX",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "minAmountY",
+        "type": "uint256"
+      }
+    ],
+    "name": "removeLiquidity",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "amountX",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountY",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "contract ILBPair",
+        "name": "lbPair",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountX",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountY",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "minAmountX",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "minAmountY",
+        "type": "uint256"
+      }
+    ],
+    "name": "addLiquidity",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "amountXAdded",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountYAdded",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountXLeft",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountYLeft",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+] 
