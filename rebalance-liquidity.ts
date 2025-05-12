@@ -6,18 +6,37 @@ dotenv.config();
 
 const LBRouterAddress = "0x013e138EF6008ae5FDFDE29700e3f2Bc61d21E3a";
 const PAIR_ADDRESS = "0x48c1a89af1102cad358549e9bb16ae5f96cddfec";
-const walletAddress = "0xD770147aa72227b7801A62411802D4e7EE837771";
 const userPrivateKey = process.env.PRIVATE_KEY!;
 
 // Load ABIs from files
 const LBRouterABI = JSON.parse(fs.readFileSync(path.join(__dirname, "abis/LBRouter.json"), "utf8"));
 const LBPairABI = JSON.parse(fs.readFileSync(path.join(__dirname, "abis/LBPair.json"), "utf8"));
 
+// ERC20 ABI for token interactions
+const ERC20ABI = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
+
 const provider = new ethers.JsonRpcProvider("https://rpc.mantle.xyz");
 const wallet = new ethers.Wallet(userPrivateKey, provider);
 const router = new ethers.Contract(LBRouterAddress, LBRouterABI, wallet);
 
-async function checkAndWithdrawLiquidity() {
+async function approveIfNeeded(token: ethers.Contract, amount: bigint, label: string) {
+  const allowance = await token.allowance(wallet.address, LBRouterAddress);
+  if (allowance < amount) {
+    console.log(`🔑 Approving ${label}...`);
+    const tx = await token.approve(LBRouterAddress, ethers.MaxUint256);
+    await tx.wait();
+    console.log(`✅ ${label} approved.`);
+  } else {
+    console.log(`✅ ${label} allowance is sufficient.`);
+  }
+}
+
+async function checkAndRebalanceLiquidity() {
   console.log("=== Checking liquidity positions ===");
   
   // Get pair contract and information
@@ -33,12 +52,12 @@ async function checkAndWithdrawLiquidity() {
   console.log(`Bin step: ${binStep}`);
   
   // Find all bins with liquidity for the wallet
-  const range = 20; // Check a wider range
+  const range = 50; // Check a wider range
   const binsToCheck: number[] = [];
   for (let i = activeId - range; i <= activeId + range; i++) {
     binsToCheck.push(i);
   }
-  const accounts = Array(binsToCheck.length).fill(walletAddress);
+  const accounts = Array(binsToCheck.length).fill(wallet.address);
   const balances: bigint[] = await lbPair.balanceOfBatch(accounts, binsToCheck);
   
   // Determine rewardable bins (active ±1)
@@ -84,23 +103,12 @@ async function checkAndWithdrawLiquidity() {
   
   // If no non-active bins, exit
   if (ids.length === 0) {
-    console.log("\nNo non-active bins with liquidity to withdraw. Exiting.");
+    console.log("\nNo non-active bins with liquidity to rebalance. Exiting.");
     return;
   }
   
   // Withdraw liquidity from non-active bins
   console.log("\n=== Withdrawing liquidity from non-active bins ===");
-  
-  // Approve router to spend LP tokens if needed
-  const isApproved = await lbPair.isApprovedForAll(walletAddress, LBRouterAddress);
-  if (!isApproved) {
-    console.log("Providing approveForAll for router...");
-    const approveTx = await lbPair.setApprovalForAll(LBRouterAddress, true);
-    await approveTx.wait();
-    console.log("ApproveForAll granted!");
-  } else {
-    console.log("ApproveForAll already exists");
-  }
   
   // Set minimum amounts and deadline
   const amountXMin = 0n;
@@ -108,6 +116,13 @@ async function checkAndWithdrawLiquidity() {
   const deadline = Math.floor(Date.now() / 1000) + 3600;
   
   try {
+    // Get initial balances
+    const tokenXContract = new ethers.Contract(tokenX, ERC20ABI, wallet);
+    const tokenYContract = new ethers.Contract(tokenY, ERC20ABI, wallet);
+    
+    const initialBalanceX = await tokenXContract.balanceOf(wallet.address);
+    const initialBalanceY = await tokenYContract.balanceOf(wallet.address);
+    
     console.log(`Withdrawing from ${ids.length} bins...`);
     const removeTx = await router.removeLiquidity(
       tokenX,
@@ -117,43 +132,63 @@ async function checkAndWithdrawLiquidity() {
       amountYMin,
       ids,
       amounts,
-      walletAddress,
+      wallet.address,
       deadline
     );
     console.log("Transaction sent:", removeTx.hash);
     const receipt = await removeTx.wait();
     console.log("✅ Liquidity withdrawn. Tx hash:", receipt.hash);
     
-    // Check liquidity after withdrawal
-    console.log("\n=== Checking liquidity after withdrawal ===");
+    // Get new balances after withdrawal
+    const newBalanceX = await tokenXContract.balanceOf(wallet.address);
+    const newBalanceY = await tokenYContract.balanceOf(wallet.address);
     
-    // Get updated balances
-    const newBalances: bigint[] = await lbPair.balanceOfBatch(accounts, binsToCheck);
+    // Calculate received amounts
+    const receivedX = newBalanceX - initialBalanceX;
+    const receivedY = newBalanceY - initialBalanceY;
     
-    // Count remaining liquidity
-    let remainingLiquidity = 0n;
-    let remainingBins = 0;
+    const tokenXDecimals = await tokenXContract.decimals();
+    const tokenYDecimals = await tokenYContract.decimals();
     
-    newBalances.forEach((balance: bigint, index: number) => {
-      const binId = binsToCheck[index];
-      if (balance > 0n) {
-        console.log(`Bin ${binId}: ${ethers.formatUnits(balance, 18)} shares remaining`);
-        remainingLiquidity += balance;
-        remainingBins++;
-      }
-    });
+    console.log("\n=== Adding liquidity to active bin ===");
+    console.log(`Received X: ${ethers.formatUnits(receivedX, tokenXDecimals)}`);
+    console.log(`Received Y: ${ethers.formatUnits(receivedY, tokenYDecimals)}`);
     
-    console.log("\n=== Final Liquidity Summary ===");
-    console.log(`Remaining bins with liquidity: ${remainingBins}`);
-    console.log(`Remaining liquidity: ${ethers.formatUnits(remainingLiquidity, 18)} shares`);
+    // Approve tokens if needed
+    await approveIfNeeded(tokenXContract, BigInt(receivedX), "TokenX");
+    await approveIfNeeded(tokenYContract, BigInt(receivedY), "TokenY");
+    
+    // Add liquidity to active bin
+    const liquidityParams = {
+      tokenX,
+      tokenY,
+      binStep: 1,
+      amountX: receivedX,
+      amountY: receivedY,
+      amountXMin: receivedX,
+      amountYMin: receivedY,
+      activeIdDesired: BigInt(activeId),
+      idSlippage: 49n,
+      deltaIds: [0],
+      distributionX: [ethers.parseUnits("1", 18)],
+      distributionY: [ethers.parseUnits("1", 18)],
+      to: wallet.address,
+      refundTo: wallet.address,
+      deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+    };
+    
+    console.log("🚀 Adding liquidity to active bin...");
+    const addTx = await router.addLiquidity(liquidityParams);
+    const addReceipt = await addTx.wait();
+    console.log("✅ Liquidity added to active bin. Tx hash:", addReceipt.hash);
     
   } catch (error) {
-    console.error("Error withdrawing liquidity:", error);
+    console.error("Error during rebalancing:", error);
   }
 }
 
 // Run the script
-checkAndWithdrawLiquidity().catch(e => {
+checkAndRebalanceLiquidity().catch(e => {
   console.error("Error:", e);
   process.exit(1);
-});
+}); 
