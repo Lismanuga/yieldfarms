@@ -1,11 +1,69 @@
 [
   {
+    "inputs": [
+      {
+        "internalType": "address[]",
+        "name": "accounts",
+        "type": "address[]"
+      },
+      {
+        "internalType": "uint256[]",
+        "name": "ids",
+        "type": "uint256[]"
+      }
+    ],
+    "name": "balanceOfBatch",
+    "outputs": [
+      {
+        "internalType": "uint256[]",
+        "name": "",
+        "type": "uint256[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "from",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256[]",
+        "name": "ids",
+        "type": "uint256[]"
+      },
+      {
+        "internalType": "uint256[]",
+        "name": "amounts",
+        "type": "uint256[]"
+      }
+    ],
+    "name": "burn",
+    "outputs": [
+      {
+        "internalType": "bytes32[]",
+        "name": "",
+        "type": "bytes32[]"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "getActiveId",
     "outputs": [
       {
         "internalType": "uint24",
-        "name": "",
+        "name": "activeId",
         "type": "uint24"
       }
     ],
@@ -18,7 +76,7 @@
     "outputs": [
       {
         "internalType": "uint16",
-        "name": "",
+        "name": "binStep",
         "type": "uint16"
       }
     ],
@@ -26,54 +84,38 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "getLBHooksParameters",
-    "outputs": [
+    "inputs": [
       {
-        "internalType": "bytes32",
-        "name": "hooksParameters",
-        "type": "bytes32"
+        "internalType": "uint256",
+        "name": "price",
+        "type": "uint256"
       }
     ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getReserves",
+    "name": "getIdFromPrice",
     "outputs": [
-      {
-        "internalType": "uint128",
-        "name": "reserveX",
-        "type": "uint128"
-      },
-      {
-        "internalType": "uint128",
-        "name": "reserveY",
-        "type": "uint128"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getReservesAndId",
-    "outputs": [
-      {
-        "internalType": "uint128",
-        "name": "reserveX",
-        "type": "uint128"
-      },
-      {
-        "internalType": "uint128",
-        "name": "reserveY",
-        "type": "uint128"
-      },
       {
         "internalType": "uint24",
-        "name": "activeId",
+        "name": "id",
         "type": "uint24"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint24",
+        "name": "id",
+        "type": "uint24"
+      }
+    ],
+    "name": "getPriceFromId",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "price",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -85,7 +127,7 @@
     "outputs": [
       {
         "internalType": "contract IERC20",
-        "name": "",
+        "name": "tokenX",
         "type": "address"
       }
     ],
@@ -98,7 +140,7 @@
     "outputs": [
       {
         "internalType": "contract IERC20",
-        "name": "",
+        "name": "tokenY",
         "type": "address"
       }
     ],
@@ -132,25 +174,82 @@
   {
     "inputs": [
       {
-        "internalType": "address[]",
-        "name": "accounts",
-        "type": "address[]"
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes32[]",
+        "name": "liquidityConfigs",
+        "type": "bytes32[]"
+      },
+      {
+        "internalType": "address",
+        "name": "refundTo",
+        "type": "address"
+      }
+    ],
+    "name": "mint",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "amountsReceived",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "amountsLeft",
+        "type": "bytes32"
       },
       {
         "internalType": "uint256[]",
-        "name": "ids",
+        "name": "liquidityMinted",
         "type": "uint256[]"
       }
     ],
-    "name": "balanceOfBatch",
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "operator",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "approved",
+        "type": "bool"
+      }
+    ],
+    "name": "setApprovalForAll",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bool",
+        "name": "swapForY",
+        "type": "bool"
+      },
+      {
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
+      }
+    ],
+    "name": "swap",
     "outputs": [
       {
-        "internalType": "uint256[]",
+        "internalType": "bytes32",
         "name": "",
-        "type": "uint256[]"
+        "type": "bytes32"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "nonpayable",
     "type": "function"
   }
 ] 
