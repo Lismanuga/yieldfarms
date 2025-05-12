@@ -1,5 +1,7 @@
 import { ethers } from "ethers";
 import * as dotenv from "dotenv";
+import * as fs from "fs";
+import * as path from "path";
 dotenv.config();
 
 const LBRouterAddress = "0x1d8b6fA722230153BE08C4Fa4aa4B4c7cd01a95A".toLowerCase();
@@ -7,26 +9,11 @@ const PAIR_ADDRESS = "0x48c1a89af1102cad358549e9bb16ae5f96cddfec";
 const walletAddress = "0x6c6402c6b99771cfc7aCc398f566c19Ba051aC8E";
 const userPrivateKey = process.env.PRIVATE_KEY!;
 
-const LBRouterABI = [
-  "function removeLiquidity(address tokenX, address tokenY, uint16 binStep, uint256 amountXMin, uint256 amountYMin, uint256[] memory ids, uint256[] memory amounts, address to, uint256 deadline) returns (uint256 amountX, uint256 amountY)",
-  "function addLiquidity((address tokenX, address tokenY, uint16 binStep, uint256 amountX, uint256 amountY, uint256 amountXMin, uint256 amountYMin, uint256 activeIdDesired, uint256 idSlippage, int256[] deltaIds, uint256[] distributionX, uint256[] distributionY, address to, address refundTo, uint256 deadline)) returns (uint256 amountXAdded, uint256 amountYAdded, uint256 amountXLeft, uint256 amountYLeft, uint256[] depositIds, uint256[] liquidityMinted)"
-];
+// Load ABIs from files
+const LBRouterABI = JSON.parse(fs.readFileSync(path.join(__dirname, "abis/LBRouterV21.json"), "utf8"));
+const LBPairABI = JSON.parse(fs.readFileSync(path.join(__dirname, "abis/LBPair.json"), "utf8"));
 
-const LBPairABI = [
-  "function getTokenX() view returns (address)",
-  "function getTokenY() view returns (address)",
-  "function getBinStep() view returns (uint16)",
-  "function getActiveId() view returns (uint24)",
-  "function balanceOf(address,uint256) view returns (uint256)",
-  "function balanceOfBatch(address[], uint256[]) view returns (uint256[])",
-  "function burn(address from, address to, uint256[] memory ids, uint256[] memory amounts) returns (bytes32[] memory amountsBurned)"
-];
-
-const LBTokenABI = [
-  "function approveForAll(address spender, bool approved)",
-  "function isApprovedForAll(address owner, address spender) view returns (bool)"
-];
-
+// ERC20 ABI for token interactions
 const ERC20ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
   "function allowance(address owner, address spender) view returns (uint256)",
@@ -41,7 +28,6 @@ const router = new ethers.Contract(LBRouterAddress, LBRouterABI, wallet);
 async function withdrawAllLiquidity() {
   // 1. Dynamically get all information about the pool
   const lbPair = new ethers.Contract(PAIR_ADDRESS, LBPairABI, wallet);
-  const lbToken = new ethers.Contract(PAIR_ADDRESS, LBTokenABI, wallet);
   const tokenX = await lbPair.getTokenX();
   const tokenY = await lbPair.getTokenY();
   const binStep = await lbPair.getBinStep();
@@ -80,10 +66,10 @@ async function withdrawAllLiquidity() {
   }
 
   // 5. Approve router to spend LP tokens
-  const isApproved = await lbToken.isApprovedForAll(walletAddress, LBRouterAddress);
+  const isApproved = await lbPair.isApprovedForAll(walletAddress, LBRouterAddress);
   if (!isApproved) {
     console.log("Providing approveForAll for router...");
-    const approveTx = await lbToken.approveForAll(LBRouterAddress, true);
+    const approveTx = await lbPair.setApprovalForAll(LBRouterAddress, true);
     await approveTx.wait();
     console.log("ApproveForAll granted!");
   } else {
@@ -213,38 +199,117 @@ async function addLiquidity() {
   }
   
   // 7. Prepare distribution arrays (concentrating around active ID)
-  const deltaIds = [-1, 0, 1]; // Distribute around active ID
+  const ids = [activeId - 1, activeId, activeId + 1]; // Distribute around active ID
   const distributionX = [25, 50, 25]; // 25% in lower bin, 50% in active bin, 25% in upper bin
   const distributionY = [25, 50, 25]; // Same distribution for Y
-  
-  // 8. Prepare liquidity parameters
-  const liquidityParams = {
-    tokenX: tokenXAddress,
-    tokenY: tokenYAddress,
-    binStep: binStep,
-    amountX: amountX,
-    amountY: amountY,
-    amountXMin: amountXMin,
-    amountYMin: amountYMin,
-    activeIdDesired: activeId,
-    idSlippage: 1, // Allow 1 bin of slippage
-    deltaIds: deltaIds,
-    distributionX: distributionX,
-    distributionY: distributionY,
-    to: walletAddress,
-    refundTo: walletAddress,
-    deadline: Math.floor(Date.now() / 1000) + 3600
-  };
+  const deadline = Math.floor(Date.now() / 1000) + 3600;
   
   try {
     console.log("Adding liquidity...");
-    const addTx = await router.addLiquidity(liquidityParams);
+    
+    // Get the current nonce
+    const nonce = await provider.getTransactionCount(walletAddress);
+    console.log(`Using nonce: ${nonce}`);
+    
+    // Get current gas price and increase it by 50%
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.gasPrice ? feeData.gasPrice * 150n / 100n : undefined;
+    console.log(`Using gas price: ${gasPrice ? ethers.formatUnits(gasPrice, 'gwei') : 'default'} gwei`);
+    
+    // Estimate gas for the transaction
+    const gasEstimate = await router.addLiquidity.estimateGas(
+      tokenXAddress,
+      tokenYAddress,
+      binStep,
+      amountX,
+      amountY,
+      ids,
+      distributionX,
+      distributionY,
+      walletAddress,
+      deadline
+    ).catch(e => {
+      console.log("Gas estimation failed, using default high value:", e.message);
+      return 5000000n; // Very high default value
+    });
+    
+    // Add 50% buffer to gas estimate
+    const gasLimit = typeof gasEstimate === 'bigint' ? 
+      gasEstimate * 150n / 100n : 
+      5000000n;
+    
+    console.log(`Gas estimate: ${gasEstimate}, using gas limit: ${gasLimit}`);
+    
+    // Use the format from LBRouterV21.json
+    const addTx = await router.addLiquidity(
+      tokenXAddress,
+      tokenYAddress,
+      binStep,
+      amountX,
+      amountY,
+      ids,
+      distributionX,
+      distributionY,
+      walletAddress,
+      deadline,
+      { 
+        nonce, 
+        gasPrice,
+        gasLimit
+      }
+    );
     console.log("Transaction sent:", addTx.hash);
     const receipt = await addTx.wait();
     console.log("✅ Liquidity added. Tx hash:", receipt.hash);
   } catch (error) {
     console.error("Error adding liquidity:", error);
+    
+    // Try with direct method call if the first attempt fails
+    console.log("\nAttempting alternative approach...");
+    try {
+      // Try with even higher gas limit and price
+      const nonce = await provider.getTransactionCount(walletAddress);
+      const feeData = await provider.getFeeData();
+      const gasPrice = feeData.gasPrice ? feeData.gasPrice * 200n / 100n : undefined;
+      
+      console.log(`Using nonce: ${nonce}, gas price: ${gasPrice ? ethers.formatUnits(gasPrice, 'gwei') : 'default'} gwei`);
+      
+      const tx = {
+        to: LBRouterAddress,
+        nonce,
+        gasPrice,
+        gasLimit: 8000000n,
+        data: router.interface.encodeFunctionData("addLiquidity", [
+          tokenXAddress,
+          tokenYAddress,
+          binStep,
+          amountX,
+          amountY,
+          ids,
+          distributionX,
+          distributionY,
+          walletAddress,
+          deadline
+        ])
+      };
+      
+      const rawTx = await wallet.sendTransaction(tx);
+      console.log("Alternative transaction sent:", rawTx.hash);
+      const receipt = await rawTx.wait();
+      if (receipt) {
+        console.log("✅ Liquidity added with alternative method. Tx hash:", receipt.hash);
+      } else {
+        console.log("⚠️ Transaction was sent but receipt is null. Tx hash:", rawTx.hash);
+      }
+    } catch (fallbackError) {
+      console.error("Alternative approach also failed:", fallbackError);
+    }
   }
+}
+
+// Helper function to wait for a specified time
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // Choose which function to run
@@ -266,6 +331,11 @@ async function main() {
       console.log("=== STARTING SEQUENTIAL OPERATION ===");
       console.log("Step 1: Withdrawing liquidity...");
       await withdrawAllLiquidity();
+      
+      // Wait for 30 seconds to ensure the first transaction is processed
+      console.log("\nWaiting 30 seconds for the first transaction to be processed...");
+      await sleep(3000);
+      
       console.log("\nStep 2: Adding new liquidity...");
       await addLiquidity();
       console.log("=== SEQUENTIAL OPERATION COMPLETED ===");
