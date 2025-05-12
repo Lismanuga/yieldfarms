@@ -5,7 +5,8 @@
   "main": "readLBPair.ts",
   "scripts": {
     "start": "ts-node readLBPair.ts",
-    "rebalance": "ts-node rebalance.ts"
+    "rebalance": "ts-node rebalance.ts",
+    "liquidity": "ts-node script.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -16,5 +17,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.17"
-  }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
