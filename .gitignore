@@ -1,3 +1,5 @@
 node_modules/
 .env
 rebalance-logs.txt
+dexscreener_usdc_usdt.txt
+merchantmoe_bin_data.txt

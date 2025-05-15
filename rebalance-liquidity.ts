@@ -271,36 +271,106 @@ async function checkAndRebalanceLiquidity() {
   }
 }
 
+// Helper to parse JSON from txt files
+function parseJSONFile(filePath: string) {
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  return JSON.parse(raw);
+}
+
+// Helper to get top 10 DEXes by h24 volume and their prices
+function getTop10DexPrices(dexData: any) {
+  const pairs = dexData.pairs;
+  const sorted = pairs.sort((a: any, b: any) => b.volume.h24 - a.volume.h24);
+  return sorted.slice(0, 10).map((p: any) => ({
+    price: Number(Number(p.priceUsd).toFixed(4)),
+    volume: p.volume.h24
+  }));
+}
+
+// Helper to get average price from top 10
+function getMarketAveragePrice(top10: {price: number, volume: number}[]) {
+  const sum = top10.reduce((acc, p) => acc + p.price, 0);
+  return Number((sum / top10.length).toFixed(4));
+}
+
+// Helper to get bin info by price (rounded to 4 decimals)
+function getBinByPrice(bins: any[], price: number) {
+  return bins.find(b => Number(Number(b.priceXY).toFixed(4)) === price);
+}
+
+// Helper to get bin by id
+function getBinById(bins: any[], binId: number) {
+  return bins.find(b => b.binId === binId);
+}
+
+// Helper to get time in ms
+function now() { return Date.now(); }
+
+let inactiveBinSince: number | null = null;
+
 async function monitorActiveBin() {
   console.log("Starting initial rebalancing...");
-  
-  // Perform initial rebalancing
   await checkAndRebalanceLiquidity();
-  
   console.log("Initial rebalancing completed. Starting active bin monitoring...");
   let previousActiveId: number | null = null;
-  
+  let previousBinId: number | null = null;
+
   while (true) {
     try {
       const lbPair = new ethers.Contract(PAIR_ADDRESS, LBPairABI, wallet);
       const currentActiveId = Number(await lbPair.getActiveId());
-      
-      if (previousActiveId === null) {
-        console.log(`Initial active bin ID: ${currentActiveId}`);
+      const bins = parseJSONFile('merchantmoe_bin_data.txt');
+      const dexData = parseJSONFile('dexscreener_usdc_usdt.txt');
+      const top10 = getTop10DexPrices(dexData);
+      const marketAvg = getMarketAveragePrice(top10);
+      const activeBin = getBinById(bins, currentActiveId);
+      const myBinId: number = previousBinId !== null ? previousBinId : currentActiveId;
+      const myBin = getBinById(bins, myBinId);
+      const myBinPrice = myBin ? Number(Number(myBin.priceXY).toFixed(4)) : null;
+      const activeBinPrice = activeBin ? Number(Number(activeBin.priceXY).toFixed(4)) : null;
+      const myBinLiquidity = myBin ? myBin.reserveX + myBin.reserveY : 0;
+      const activeBinLiquidity = activeBin ? activeBin.reserveX + activeBin.reserveY : 0;
+      // Check if we are in active bin
+      if (myBinId === currentActiveId) {
+        inactiveBinSince = null;
+        previousBinId = currentActiveId;
         previousActiveId = currentActiveId;
-      } else if (currentActiveId !== previousActiveId) {
-        console.log(`Active bin changed from ${previousActiveId} to ${currentActiveId}`);
-        logToFile(`Active bin changed from ${previousActiveId} to ${currentActiveId}`);
-        await checkAndRebalanceLiquidity();
-        previousActiveId = currentActiveId;
+        logToFile(`Still in active bin ${currentActiveId}. No rebalance needed.`);
+      } else {
+        // We are in non-active bin
+        if (!inactiveBinSince) inactiveBinSince = now();
+        // Check 4h timeout
+        const fourHours = 4 * 60 * 60 * 1000;
+        if (now() - inactiveBinSince > fourHours) {
+          logToFile(`In non-active bin ${myBinId} for >4h. Forcing rebalance to active bin ${currentActiveId}.`);
+          await checkAndRebalanceLiquidity();
+          previousBinId = currentActiveId;
+          previousActiveId = currentActiveId;
+          inactiveBinSince = null;
+        } else {
+          // Market logic
+          if (activeBinPrice !== null && Math.abs(activeBinPrice - marketAvg) < 0.0001) {
+            // Check liquidity
+            if (activeBinLiquidity >= 0.1 * myBinLiquidity) {
+              logToFile(`Rebalancing: active bin price ${activeBinPrice} matches market avg ${marketAvg}, liquidity ok. Moving to active bin ${currentActiveId}.`);
+              await checkAndRebalanceLiquidity();
+              previousBinId = currentActiveId;
+              previousActiveId = currentActiveId;
+              inactiveBinSince = null;
+            } else {
+              logToFile(`Not rebalancing: active bin liquidity too low (${activeBinLiquidity} < 10% of ${myBinLiquidity}).`);
+            }
+          } else if (myBinPrice !== null && Math.abs(myBinPrice - marketAvg) < 0.0001) {
+            logToFile(`Not rebalancing: our bin price ${myBinPrice} matches market avg ${marketAvg}. Waiting for price to return.`);
+          } else {
+            logToFile(`Not rebalancing: neither active bin price (${activeBinPrice}) nor our bin price (${myBinPrice}) matches market avg (${marketAvg}).`);
+          }
+        }
       }
-      
-      // Wait for 1 minute
       await new Promise(resolve => setTimeout(resolve, 60000));
     } catch (error) {
       console.error("Error in monitoring loop:", error);
       logToFile(`Error in monitoring loop: ${error}`);
-      // Wait for 1 minute before retrying
       await new Promise(resolve => setTimeout(resolve, 60000));
     }
   }
