@@ -1,61 +1,66 @@
-import * as fs from 'fs';
-import * as path from 'path';
-
 // Config for swap limit (can be imported or set here)
 export const APR = 0.08; // 8% annual yield
 export const FEE = 0.0001; // fee per swap
-export const P = 0.5; // portfolio share swapped at once
 
-// Function to calculate the maximum number of swaps per day
+// In-memory state
+let maxSwaps: number = 0;
+let swapsToday: number = 0;
+let lastReset: number = Date.now();
+
+// Function to calculate the maximum number of swaps per day (now takes P as argument)
 export function getMaxSwapsPerDay(apr: number, fee: number, p: number): number {
   return Math.floor((apr / 365) / (p * fee));
 }
 
-// State file for daily swap limit
-const swapLimitStateFile = path.join(__dirname, 'swap_limit_state.json');
-
-// Read or initialize swap limit state
-export function readSwapLimitState() {
-  if (!fs.existsSync(swapLimitStateFile)) {
-    return {
-      lastReset: Date.now(),
-      swapsToday: 0,
-      maxSwaps: getMaxSwapsPerDay(APR, FEE, P)
-    };
+/**
+ * Calculate dynamic P (swap share) for a bin.
+ * @param bins - array of bin objects (from fetchMerchantMoeBins)
+ * @param tokenX - symbol or address of token X (e.g. 'USDC')
+ * @param tokenY - symbol or address of token Y (e.g. 'USDT')
+ * @returns P = Rx / (Rx + Ry) for the active bin
+ */
+export function getDynamicP(bins: any[], tokenX: string, tokenY: string): number {
+  let bestBin = null;
+  let maxLiquidity = 0;
+  for (const bin of bins) {
+    const Rx = Number(bin.reserveX);
+    const Ry = Number(bin.reserveY);
+    if (Rx + Ry > maxLiquidity) {
+      maxLiquidity = Rx + Ry;
+      bestBin = bin;
+    }
   }
-  try {
-    return JSON.parse(fs.readFileSync(swapLimitStateFile, 'utf-8'));
-  } catch {
-    return {
-      lastReset: Date.now(),
-      swapsToday: 0,
-      maxSwaps: getMaxSwapsPerDay(APR, FEE, P)
-    };
-  }
+  if (!bestBin) throw new Error('No bin found for dynamic P calculation');
+  const Rx = Number(bestBin.reserveX);
+  const Ry = Number(bestBin.reserveY);
+  if (Rx + Ry === 0) return 0;
+  return Rx / (Rx + Ry);
 }
 
-function writeSwapLimitState(state: { lastReset: number, swapsToday: number, maxSwaps: number }) {
-  fs.writeFileSync(swapLimitStateFile, JSON.stringify(state));
+// Call this to update maxSwaps for the day (after getting fresh P)
+export function setMaxSwapsForToday(p: number) {
+  maxSwaps = getMaxSwapsPerDay(APR, FEE, p);
+  swapsToday = 0;
+  lastReset = Date.now();
 }
 
-// Check and update swap limit state if needed
-export function updateSwapLimitStateIfNeeded(logToFile?: (msg: string) => void) {
-  const state = readSwapLimitState();
+// Call this at the start of each loop to check if 24h passed and reset if needed
+export function checkAndResetSwapLimitIfNeeded(p: number) {
   const now = Date.now();
   const oneDayMs = 24 * 60 * 60 * 1000;
-  if (now - state.lastReset > oneDayMs) {
-    // Recalculate maxSwaps and reset counter
-    state.maxSwaps = getMaxSwapsPerDay(APR, FEE, P);
-    state.swapsToday = 0;
-    state.lastReset = now;
-    writeSwapLimitState(state);
-    if (logToFile) logToFile(`Swap limit reset: maxSwaps=${state.maxSwaps}, swapsToday=0`);
+  if (now - lastReset > oneDayMs) {
+    setMaxSwapsForToday(p);
   }
-  return state;
 }
 
 export function incrementSwapsToday() {
-  const state = readSwapLimitState();
-  state.swapsToday++;
-  writeSwapLimitState(state);
+  swapsToday++;
+}
+
+export function getMaxSwaps() {
+  return maxSwaps;
+}
+
+export function getSwapsToday() {
+  return swapsToday;
 } 
