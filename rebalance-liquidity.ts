@@ -5,6 +5,8 @@ import * as path from "path";
 import LBRouterABI from "./abis/LBRouter.json";
 import LBPairABI from "./abis/LBPair.json";
 import ERC20ABI from "./abis/ERC20.json";
+import { updateSwapLimitStateIfNeeded, incrementSwapsToday, readSwapLimitState } from './swapLimit';
+import { fetchMerchantMoeBins, fetchDexScreenerData } from './fetch-and-save';
 dotenv.config();
 
 const LBRouterAddress = process.env.LB_ROUTER_ADDRESS!;
@@ -271,12 +273,6 @@ async function checkAndRebalanceLiquidity() {
   }
 }
 
-// Helper to parse JSON from txt files
-function parseJSONFile(filePath: string) {
-  const raw = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(raw);
-}
-
 // Helper to get top 10 DEXes by h24 volume and their prices
 function getTop10DexPrices(dexData: any) {
   const pairs = dexData.pairs;
@@ -310,17 +306,27 @@ let inactiveBinSince: number | null = null;
 
 async function monitorActiveBin() {
   console.log("Starting initial rebalancing...");
-  await checkAndRebalanceLiquidity();
+  // Update swap limit state and get current values
+  let swapState = updateSwapLimitStateIfNeeded(logToFile);
+  if (swapState.swapsToday >= swapState.maxSwaps) {
+    console.log(`❌ Swap limit reached (${swapState.swapsToday}/${swapState.maxSwaps}) for today. Skipping initial rebalance.`);
+  } else {
+    await checkAndRebalanceLiquidity();
+    incrementSwapsToday();
+    swapState = readSwapLimitState();
+  }
   console.log("Initial rebalancing completed. Starting active bin monitoring...");
   let previousActiveId: number | null = null;
   let previousBinId: number | null = null;
 
   while (true) {
     try {
+      swapState = updateSwapLimitStateIfNeeded(logToFile);
       const lbPair = new ethers.Contract(PAIR_ADDRESS, LBPairABI, wallet);
       const currentActiveId = Number(await lbPair.getActiveId());
-      const bins = parseJSONFile('merchantmoe_bin_data.txt');
-      const dexData = parseJSONFile('dexscreener_usdc_usdt.txt');
+      // Fetch bins and dex data dynamically
+      const bins = await fetchMerchantMoeBins();
+      const dexData = await fetchDexScreenerData();
       const top10 = getTop10DexPrices(dexData);
       const marketAvg = getMarketAveragePrice(top10);
       const activeBin = getBinById(bins, currentActiveId);
@@ -342,21 +348,35 @@ async function monitorActiveBin() {
         // Check 4h timeout
         const fourHours = 4 * 60 * 60 * 1000;
         if (now() - inactiveBinSince > fourHours) {
-          logToFile(`In non-active bin ${myBinId} for >4h. Forcing rebalance to active bin ${currentActiveId}.`);
-          await checkAndRebalanceLiquidity();
-          previousBinId = currentActiveId;
-          previousActiveId = currentActiveId;
-          inactiveBinSince = null;
+          // Check swap limit
+          if (swapState.swapsToday >= swapState.maxSwaps) {
+            logToFile(`❌ Swap limit reached (${swapState.swapsToday}/${swapState.maxSwaps}) for today. Skipping rebalance.`);
+          } else {
+            logToFile(`In non-active bin ${myBinId} for >4h. Forcing rebalance to active bin ${currentActiveId}.`);
+            await checkAndRebalanceLiquidity();
+            incrementSwapsToday();
+            swapState = readSwapLimitState();
+            previousBinId = currentActiveId;
+            previousActiveId = currentActiveId;
+            inactiveBinSince = null;
+          }
         } else {
           // Market logic
           if (activeBinPrice !== null && Math.abs(activeBinPrice - marketAvg) < 0.0001) {
             // Check liquidity
             if (activeBinLiquidity >= 0.1 * myBinLiquidity) {
-              logToFile(`Rebalancing: active bin price ${activeBinPrice} matches market avg ${marketAvg}, liquidity ok. Moving to active bin ${currentActiveId}.`);
-              await checkAndRebalanceLiquidity();
-              previousBinId = currentActiveId;
-              previousActiveId = currentActiveId;
-              inactiveBinSince = null;
+              // Check swap limit
+              if (swapState.swapsToday >= swapState.maxSwaps) {
+                logToFile(`❌ Swap limit reached (${swapState.swapsToday}/${swapState.maxSwaps}) for today. Skipping rebalance.`);
+              } else {
+                logToFile(`Rebalancing: active bin price ${activeBinPrice} matches market avg ${marketAvg}, liquidity ok. Moving to active bin ${currentActiveId}.`);
+                await checkAndRebalanceLiquidity();
+                incrementSwapsToday();
+                swapState = readSwapLimitState();
+                previousBinId = currentActiveId;
+                previousActiveId = currentActiveId;
+                inactiveBinSince = null;
+              }
             } else {
               logToFile(`Not rebalancing: active bin liquidity too low (${activeBinLiquidity} < 10% of ${myBinLiquidity}).`);
             }
@@ -381,4 +401,4 @@ monitorActiveBin().catch(e => {
   console.error("Fatal error:", e);
   logToFile(`Fatal error: ${e}`);
   process.exit(1);
-}); 
+});
