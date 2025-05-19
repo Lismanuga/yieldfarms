@@ -190,82 +190,84 @@ async function checkAndRebalanceLiquidity() {
     // Add delay before next transaction
     await new Promise(resolve => setTimeout(resolve,15000));
     
-    // Add liquidity to active bin
-    let addTx;
-    
-    // Check if we have any MNT to add
-    const hasMNT = (isTokenXMNT && receivedX > 0n) || (isTokenYMNT && receivedY > 0n);
-    
-    if (hasMNT) {
-      // For MNT, we need to send the native token amount as value
-      const nativeAmount = isTokenXMNT ? receivedX : receivedY;
-
-      if (nativeAmount <= 0n) {
-        console.error("Invalid native token amount:", ethers.formatEther(nativeAmount));
-        throw new Error("Invalid native token amount for addLiquidityNATIVE");
+    // Add liquidity to active bin with retry logic
+    let addSuccess = false;
+    let attempts = 0;
+    const maxAttempts = 3;
+    while (!addSuccess && attempts < maxAttempts) {
+      try {
+        let addTx;
+        // Check if we have any MNT to add
+        const hasMNT = (isTokenXMNT && receivedX > 0n) || (isTokenYMNT && receivedY > 0n);
+        if (hasMNT) {
+          // For MNT, we need to send the native token amount as value
+          const nativeAmount = isTokenXMNT ? receivedX : receivedY;
+          if (nativeAmount <= 0n) {
+            console.error("Invalid native token amount:", ethers.formatEther(nativeAmount));
+            throw new Error("Invalid native token amount for addLiquidityNATIVE");
+          }
+          const liquidityParams = {
+            token: isTokenXMNT ? tokenY : tokenX,
+            binStep: binStep,
+            amountTokenMin: isTokenXMNT ? receivedY : receivedX,
+            amountNATIVEMin: nativeAmount,
+            activeIdDesired: BigInt(activeId),
+            idSlippage: 49n,
+            deltaIds: [0],
+            distributionX: [ethers.parseUnits("1", 18)],
+            distributionY: [ethers.parseUnits("1", 18)],
+            to: wallet.address,
+            refundTo: wallet.address,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+          };
+          const nonce = await provider.getTransactionCount(wallet.address);
+          addTx = await router.addLiquidityNATIVE(liquidityParams, { 
+            value: nativeAmount,
+            gasLimit: 5000000,
+            nonce: nonce
+          });
+        } else {
+          const liquidityParams = {
+            tokenX: tokenX,
+            tokenY: tokenY,
+            binStep: binStep,
+            amountX: receivedX,
+            amountY: receivedY,
+            amountXMin: receivedX,
+            amountYMin: receivedY,
+            activeIdDesired: BigInt(activeId),
+            idSlippage: 49n,
+            deltaIds: [0],
+            distributionX: [ethers.parseUnits("1", 18)],
+            distributionY: [ethers.parseUnits("1", 18)],
+            to: wallet.address,
+            refundTo: wallet.address,
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+          };
+          const nonce = await provider.getTransactionCount(wallet.address);
+          addTx = await router.addLiquidity(liquidityParams, {
+            nonce: nonce
+          });
+        }
+        const addReceipt = await addTx.wait();
+        // Log gas usage for adding liquidity
+        const addGasUsed = addReceipt.gasUsed;
+        const addGasPrice = addReceipt.gasPrice;
+        const addGasCost = addGasUsed * addGasPrice;
+        logToFile(`Add liquidity executed - Gas used: ${addGasUsed}, Gas cost: ${ethers.formatEther(addGasCost)} ETH, Tx hash: ${addReceipt.hash}`);
+        console.log("✅ Liquidity added to active bin. Tx hash:", addReceipt.hash);
+        addSuccess = true;
+      } catch (error) {
+        attempts++;
+        logToFile(`Add liquidity attempt ${attempts} failed: ${error}`);
+        if (attempts < maxAttempts) {
+          await new Promise(res => setTimeout(res, 5000));
+        } else {
+          logToFile(`Add liquidity failed after ${maxAttempts} attempts.`);
+          throw error;
+        }
       }
-
-      // Prepare parameters for addLiquidityNATIVE
-      const liquidityParams = {
-        token: isTokenXMNT ? tokenY : tokenX, // The non-MNT token
-        binStep: binStep,
-        amountTokenMin: isTokenXMNT ? receivedY : receivedX,
-        amountNATIVEMin: nativeAmount,
-        activeIdDesired: BigInt(activeId),
-        idSlippage: 49n,
-        deltaIds: [0],
-        distributionX: [ethers.parseUnits("1", 18)],
-        distributionY: [ethers.parseUnits("1", 18)],
-        to: wallet.address,
-        refundTo: wallet.address,
-        deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
-      };
-      
-      // Get current nonce
-      const nonce = await provider.getTransactionCount(wallet.address);
-      
-      addTx = await router.addLiquidityNATIVE(liquidityParams, { 
-        value: nativeAmount,
-        gasLimit: 5000000,
-        nonce: nonce
-      });
-    } else {
-      // If we only have non-MNT tokens, use regular addLiquidity
-      const liquidityParams = {
-        tokenX: tokenX,
-        tokenY: tokenY,
-        binStep: binStep,
-        amountX: receivedX,
-        amountY: receivedY,
-        amountXMin: receivedX,
-        amountYMin: receivedY,
-        activeIdDesired: BigInt(activeId),
-        idSlippage: 49n,
-        deltaIds: [0],
-        distributionX: [ethers.parseUnits("1", 18)],
-        distributionY: [ethers.parseUnits("1", 18)],
-        to: wallet.address,
-        refundTo: wallet.address,
-        deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
-      };
-      
-      // Get current nonce
-      const nonce = await provider.getTransactionCount(wallet.address);
-      
-      addTx = await router.addLiquidity(liquidityParams, {
-        nonce: nonce
-      });
     }
-    
-    const addReceipt = await addTx.wait();
-    
-    // Log gas usage for adding liquidity
-    const addGasUsed = addReceipt.gasUsed;
-    const addGasPrice = addReceipt.gasPrice;
-    const addGasCost = addGasUsed * addGasPrice;
-    logToFile(`Add liquidity executed - Gas used: ${addGasUsed}, Gas cost: ${ethers.formatEther(addGasCost)} ETH, Tx hash: ${addReceipt.hash}`);
-    
-    console.log("✅ Liquidity added to active bin. Tx hash:", addReceipt.hash);
     
   } catch (error) {
     console.error("Error during rebalancing:", error);
